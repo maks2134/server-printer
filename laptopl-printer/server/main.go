@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,8 +14,10 @@ import (
 )
 
 const (
-	port         = 9100
-	outputFolder = "printed_documents"
+	port            = 9100
+	outputFolder    = "printed_documents"
+	printerIP       = "172.21.0.102:631"
+	printerEndpoint = "PRINTER-NAME" //НАПИСАТЬ НОРМ НАЗВАНИЕ ПРИНТЕРА
 )
 
 func main() {
@@ -77,6 +81,14 @@ func handlePrintJob(conn net.Conn) {
 		fmt.Printf("Error adding watermark: %v\n", err)
 		return
 	}
+
+	err = sendToPrinter(finalFilename)
+	if err != nil {
+		fmt.Printf("Error sending to printer: %v\n", err)
+	} else {
+		fmt.Println("Document successfully sent to physical printer")
+	}
+
 	os.Remove(tempFilename)
 	fmt.Printf("Document with watermark saved: %s\n", finalFilename)
 }
@@ -104,5 +116,42 @@ func addWatermark(inputPath, outputPath, text string) error {
 	if err != nil {
 		return fmt.Errorf("ghostscript error: %v, output: %s", err, string(output))
 	}
+	return nil
+}
+
+func sendToPrinter(filePath string) error {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return fmt.Errorf("error opening file: %v", err)
+	}
+	defer file.Close()
+
+	var buf bytes.Buffer
+	_, err = io.Copy(&buf, file)
+	if err != nil {
+		return fmt.Errorf("error reading file: %v", err)
+	}
+
+	printerURL := "http://" + printerIP + printerEndpoint
+	req, err := http.NewRequest("POST", printerURL, &buf)
+	if err != nil {
+		return fmt.Errorf("error creating request: %v", err)
+	}
+
+	req.Header.Set("Content-Type", "application/pdf")
+	req.Header.Set("User-Agent", "Go-Print-Client")
+	req.Header.Set("Connection", "close")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("error sending to printer: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("printer returned error status: %s", resp.Status)
+	}
+
 	return nil
 }
